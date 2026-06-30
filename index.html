@@ -53,8 +53,9 @@
         <div class="editor-actions">
           <button id="editor-export" class="editor-btn wide">复制世界 JSON</button>
           <button id="editor-reset" class="editor-btn wide">重置地形</button>
+          <button id="tutorial-btn-editor" type="button" class="editor-btn wide tutorial-link-btn">使用教程</button>
         </div>
-        <p class="editor-foot">按 <kbd>T</kbd> 退出编辑</p>
+        <p class="editor-foot">按 <kbd>T</kbd> 退出编辑 · <kbd>H</kbd> 教程</p>
       </div>
       <footer id="hud-bottom">
         <div class="panel controls-panel">
@@ -69,10 +70,27 @@
             <span><kbd>M</kbd> 地图</span>
             <span><kbd>T</kbd> 地形编辑</span>
             <span><kbd>P</kbd> 岛屿参数</span>
+            <span><kbd>H</kbd> 教程</span>
           </div>
-          <p class="hint">P 岛屿参数 · 实时更新地形 · T 手动画笔</p>
+          <p class="hint">P 岛屿参数 · T 手动画笔 · H 打开教程</p>
+          <button id="tutorial-btn-hud" type="button" class="tutorial-hud-btn" title="打开教程 (H)">?</button>
         </div>
       </footer>
+    </div>
+    <div id="tutorial-overlay" class="tutorial-overlay" aria-hidden="true">
+      <div class="tutorial-backdrop"></div>
+      <div class="tutorial-dialog panel" role="dialog" aria-labelledby="tutorial-title">
+        <div class="tutorial-header">
+          <h2 id="tutorial-title">山海行 · 使用教程</h2>
+          <button type="button" class="tutorial-close" aria-label="关闭">×</button>
+        </div>
+        <nav class="tutorial-tabs" aria-label="教程分类">
+          <button type="button" data-section="overview" class="active">概览</button>
+          <button type="button" data-section="brush">手绘画笔 (T)</button>
+          <button type="button" data-section="params">岛屿参数 (P)</button>
+        </nav>
+        <div id="tutorial-body" class="tutorial-body"></div>
+      </div>
     </div>
     <canvas id="game"></canvas>
     <script type="module" src="js/main.js"></script>

@@ -18,12 +18,87 @@ import { parseWorldImport } from './worldIO.js';
 const LIVE_UPDATE_MS = 400;
 
 const FEATURE_HINTS = {
-  mountains: '尖峰 — 高、陡、可拉高陡度',
-  hills: '圆丘 — 矮、宽、柔和起伏',
+  mountains: '山峰 — 高而陡，可尖可平；頂形控制山顶形状，顶宽控制平顶范围',
+  hills: '丘陵 — 矮而广的柔和隆起，始终圆形；适合起伏田园感',
   crescents: '新月咬痕 — 从岛边缘切出缺口，可叠加多个',
-  holes: '挖坑 — 降低地面，可挖盆地或洞穴入口',
-  clearings: '平地 — 压平到固定高度',
+  holes: '坑洞 — 倒过来的山峰（默认圆底盆形）；注水=1 灌水',
+  clearings: '平地 — 压平到固定高度，支持多边形/星形/环形轮廓',
 };
+
+function fieldHelpText(field) {
+  return field.desc ?? field.hint ?? '';
+}
+
+let fieldTooltipEl = null;
+
+function getFieldTooltipEl() {
+  if (!fieldTooltipEl) {
+    fieldTooltipEl = document.createElement('div');
+    fieldTooltipEl.className = 'island-field-tooltip';
+    fieldTooltipEl.setAttribute('role', 'tooltip');
+    fieldTooltipEl.hidden = true;
+    document.body.appendChild(fieldTooltipEl);
+  }
+  return fieldTooltipEl;
+}
+
+function positionFieldTooltip(anchor, tip) {
+  const pad = 8;
+  const gap = 6;
+  const rect = anchor.getBoundingClientRect();
+  tip.style.left = '0';
+  tip.style.top = '0';
+  tip.hidden = false;
+
+  let left = rect.left;
+  let top = rect.bottom + gap;
+  const tipRect = tip.getBoundingClientRect();
+
+  if (left + tipRect.width > window.innerWidth - pad) {
+    left = window.innerWidth - tipRect.width - pad;
+  }
+  if (left < pad) left = pad;
+
+  if (top + tipRect.height > window.innerHeight - pad) {
+    top = rect.top - tipRect.height - gap;
+  }
+  if (top < pad) top = pad;
+
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function hideFieldTooltip() {
+  if (fieldTooltipEl) fieldTooltipEl.hidden = true;
+}
+
+function appendFieldHelp(labelEl, field) {
+  const text = fieldHelpText(field);
+  if (!text) return;
+  const help = document.createElement('span');
+  help.className = 'island-field-help';
+  help.textContent = '?';
+  help.setAttribute('aria-label', text);
+  help.tabIndex = 0;
+
+  const show = () => {
+    const tip = getFieldTooltipEl();
+    tip.textContent = text;
+    positionFieldTooltip(help, tip);
+  };
+
+  help.addEventListener('mouseenter', show);
+  help.addEventListener('mouseleave', hideFieldTooltip);
+  help.addEventListener('focus', show);
+  help.addEventListener('blur', hideFieldTooltip);
+  labelEl.appendChild(help);
+}
+
+function clampNumber(value, field) {
+  const n = Number(value);
+  if (Number.isNaN(n)) return field.default;
+  return Math.min(field.max, Math.max(field.min, n));
+}
 
 function makeNumberInput(field, value, onChange, onLive) {
   const row = document.createElement('label');
@@ -31,22 +106,70 @@ function makeNumberInput(field, value, onChange, onLive) {
   const label = document.createElement('span');
   label.className = 'island-field-label';
   label.textContent = field.label;
-  if (field.hint) label.title = field.hint;
+  appendFieldHelp(label, field);
   const input = document.createElement('input');
   input.type = 'number';
   input.className = 'island-input';
   input.min = String(field.min);
   input.max = String(field.max);
   input.step = String(field.step);
-  input.value = String(value ?? field.default);
+  input.value = String(clampNumber(value ?? field.default, field));
   const fire = () => {
-    onChange(Number(input.value));
+    const n = clampNumber(input.value, field);
+    input.value = String(n);
+    onChange(n);
     onLive?.();
   };
   input.addEventListener('change', fire);
   input.addEventListener('input', fire);
   row.append(label, input);
   return { row, input };
+}
+
+function makeFieldInput(field, value, onChange, onLive) {
+  if (field.type === 'select') {
+    const row = document.createElement('label');
+    row.className = 'island-field';
+    const label = document.createElement('span');
+    label.className = 'island-field-label';
+    label.textContent = field.label;
+    appendFieldHelp(label, field);
+    const select = document.createElement('select');
+    select.className = 'island-select';
+    for (const opt of field.options ?? []) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      select.appendChild(o);
+    }
+    select.value = value ?? field.default;
+    select.addEventListener('change', () => {
+      onChange(select.value);
+      onLive?.();
+    });
+    row.append(label, select);
+    return { row, input: select };
+  }
+  if (field.type === 'color') {
+    const row = document.createElement('label');
+    row.className = 'island-field';
+    const label = document.createElement('span');
+    label.className = 'island-field-label';
+    label.textContent = field.label;
+    appendFieldHelp(label, field);
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'island-color-input';
+    const raw = value ?? field.default;
+    input.value = String(raw).startsWith('#') ? raw : `#${raw}`;
+    input.addEventListener('input', () => {
+      onChange(input.value);
+      onLive?.();
+    });
+    row.append(label, input);
+    return { row, input };
+  }
+  return makeNumberInput(field, value, onChange, onLive);
 }
 
 function makeFeatureCard(title, fields, data, index, onChange, onRemove, onLive) {
@@ -66,7 +189,7 @@ function makeFeatureCard(title, fields, data, index, onChange, onRemove, onLive)
   head.appendChild(removeBtn);
   card.appendChild(head);
   for (const field of fields) {
-    const { row } = makeNumberInput(field, data[field.key], (v) => onChange(index, field.key, v), onLive);
+    const { row } = makeFieldInput(field, data[field.key], (v) => onChange(index, field.key, v), onLive);
     card.appendChild(row);
   }
   return card;
@@ -87,7 +210,7 @@ export class IslandParamUI {
     this.islandsContainer = null;
     this.paintStatusEl = null;
     this.liveStatusEl = null;
-    this.fileInput = null;
+    this.jsonImportEl = null;
     this._build();
     this._renderIslands();
     this._suppressLiveUpdate = false;
@@ -167,31 +290,24 @@ export class IslandParamUI {
       await this._applyWorld({ keepPaint: false });
     } catch (e) {
       console.warn('[Island] import failed', e);
-      alert('JSON 格式无效，请检查后重试');
+      if (e?.errors?.length) {
+        alert(`JSON 参数超出允许范围：\n\n${e.errors.slice(0, 12).join('\n')}${e.errors.length > 12 ? `\n…共 ${e.errors.length} 项` : ''}`);
+      } else if (e instanceof SyntaxError) {
+        alert('JSON 格式无效，请检查后重试');
+      } else {
+        alert(e?.message || 'JSON 导入失败');
+      }
     }
   }
 
-  async _importFromClipboard() {
-    if (this.isUpdating) return;
-    let text;
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      alert('无法读取剪贴板，请允许粘贴权限后重试');
+  async _importFromTextarea() {
+    if (this.isUpdating || !this.jsonImportEl) return;
+    const text = this.jsonImportEl.value.trim();
+    if (!text) {
+      alert('请先在下方粘贴 JSON');
       return;
     }
     await this._importWorld(text);
-  }
-
-  async _importFromFile(file) {
-    if (this.isUpdating || !file) return;
-    try {
-      const text = await file.text();
-      await this._importWorld(text);
-    } catch (e) {
-      console.warn('[Island] file import failed', e);
-      alert('无法读取文件');
-    }
   }
 
   _build() {
@@ -220,13 +336,14 @@ export class IslandParamUI {
 
     const scroll = document.createElement('div');
     scroll.className = 'island-scroll';
+    scroll.addEventListener('scroll', hideFieldTooltip, { passive: true });
     this.root.appendChild(scroll);
 
     const worldSection = document.createElement('section');
     worldSection.className = 'island-section';
     worldSection.innerHTML = '<h3>世界</h3>';
     for (const field of WORLD_FIELDS) {
-      const { row, input } = makeNumberInput(field, this.world[field.key], (v) => {
+      const { row, input } = makeFieldInput(field, this.world[field.key], (v) => {
         this.world[field.key] = v;
       }, this._onLive);
       this.worldInputs[field.key] = input;
@@ -263,6 +380,51 @@ export class IslandParamUI {
     this.islandsContainer.className = 'island-list';
     scroll.appendChild(this.islandsContainer);
 
+    const importSection = document.createElement('section');
+    importSection.className = 'island-section island-import-section';
+    importSection.innerHTML = '<h3>导入 JSON</h3>';
+
+    this.jsonImportEl = document.createElement('textarea');
+    this.jsonImportEl.className = 'island-json-input';
+    this.jsonImportEl.rows = 7;
+    this.jsonImportEl.spellcheck = false;
+    this.jsonImportEl.placeholder = '在此粘贴世界 JSON…';
+    importSection.appendChild(this.jsonImportEl);
+
+    const importRow = document.createElement('div');
+    importRow.className = 'island-import-actions';
+
+    const applyJsonBtn = document.createElement('button');
+    applyJsonBtn.type = 'button';
+    applyJsonBtn.className = 'island-btn primary wide';
+    applyJsonBtn.textContent = '应用 JSON';
+    applyJsonBtn.addEventListener('click', () => this._importFromTextarea());
+
+    const clipFillBtn = document.createElement('button');
+    clipFillBtn.type = 'button';
+    clipFillBtn.className = 'island-btn wide';
+    clipFillBtn.textContent = '从剪贴板填入';
+    clipFillBtn.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (this.jsonImportEl) this.jsonImportEl.value = text;
+      } catch {
+        alert('无法读取剪贴板');
+      }
+    });
+
+    const clearJsonBtn = document.createElement('button');
+    clearJsonBtn.type = 'button';
+    clearJsonBtn.className = 'island-btn wide';
+    clearJsonBtn.textContent = '清空';
+    clearJsonBtn.addEventListener('click', () => {
+      if (this.jsonImportEl) this.jsonImportEl.value = '';
+    });
+
+    importRow.append(applyJsonBtn, clipFillBtn, clearJsonBtn);
+    importSection.appendChild(importRow);
+    scroll.appendChild(importSection);
+
     const actions = document.createElement('div');
     actions.className = 'island-actions';
 
@@ -290,37 +452,21 @@ export class IslandParamUI {
       const json = this.callbacks.onExportJSON?.()
         ?? JSON.stringify(sanitizeWorld(this.world), null, 2);
       navigator.clipboard?.writeText(json);
+      if (this.jsonImportEl) this.jsonImportEl.value = json;
     });
 
-    const importFileBtn = document.createElement('button');
-    importFileBtn.type = 'button';
-    importFileBtn.className = 'island-btn wide';
-    importFileBtn.textContent = '导入 JSON 文件';
-    importFileBtn.addEventListener('click', () => this.fileInput?.click());
+    const tutorialBtn = document.createElement('button');
+    tutorialBtn.type = 'button';
+    tutorialBtn.id = 'tutorial-btn-island';
+    tutorialBtn.className = 'island-btn wide tutorial-link-btn';
+    tutorialBtn.textContent = '使用教程';
 
-    const importClipBtn = document.createElement('button');
-    importClipBtn.type = 'button';
-    importClipBtn.className = 'island-btn wide';
-    importClipBtn.textContent = '粘贴 JSON';
-    importClipBtn.addEventListener('click', () => this._importFromClipboard());
-
-    this.fileInput = document.createElement('input');
-    this.fileInput.type = 'file';
-    this.fileInput.accept = '.json,application/json';
-    this.fileInput.hidden = true;
-    this.fileInput.addEventListener('change', () => {
-      const file = this.fileInput.files?.[0];
-      if (file) this._importFromFile(file);
-      this.fileInput.value = '';
-    });
-
-    actions.append(resetBtn, exportBtn, importFileBtn, importClipBtn);
-    this.root.appendChild(this.fileInput);
+    actions.append(resetBtn, exportBtn, tutorialBtn);
     this.root.appendChild(actions);
 
     const foot = document.createElement('p');
     foot.className = 'island-foot';
-    foot.innerHTML = '按 <kbd>P</kbd> 关闭 · 参数实时更新地形';
+    foot.innerHTML = '按 <kbd>P</kbd> 关闭 · <kbd>H</kbd> 教程 · 参数实时更新';
     this.root.appendChild(foot);
   }
 
@@ -354,7 +500,7 @@ export class IslandParamUI {
         sub.className = 'island-subsection';
         sub.innerHTML = `<h4>${group.label}</h4>`;
         for (const field of group.fields) {
-          const { row } = makeNumberInput(field, island[field.key], (v) => {
+          const { row } = makeFieldInput(field, island[field.key], (v) => {
             this.world.islands[islandIdx][field.key] = v;
           }, this._onLive);
           sub.appendChild(row);
@@ -448,6 +594,7 @@ export class IslandParamUI {
   hide() {
     this.visible = false;
     this.root?.classList.remove('visible');
+    hideFieldTooltip();
   }
 }
 

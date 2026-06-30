@@ -1,11 +1,12 @@
 import { SEA_LEVEL } from '../constants.js';
+import { mountainBump, holeBump, shapedFlatten, shapedFalloff } from './shapeFalloff.js';
 
 function smoothstep(edge0, edge1, x) {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
 }
 
-/** Elliptical dome/bump — power <1 = gentle hill, power >2 = sharp peak */
+/** Elliptical dome/bump — legacy helper; prefer shapedBump */
 function ellipticalBump(x, z, cx, cz, sizeX, sizeZ, amount, power) {
   const sx = Math.max(sizeX, 1);
   const sz = Math.max(sizeZ, 1);
@@ -17,14 +18,28 @@ function ellipticalBump(x, z, cx, cz, sizeX, sizeZ, amount, power) {
   return amount * Math.pow(falloff, power);
 }
 
-function ellipseDistance(x, z, island) {
+function islandLocalXZ(x, z, island) {
   const dx = x - island.centerX;
   const dz = z - island.centerZ;
-  const ang = (island.shapeAngle * Math.PI) / 180;
-  const rx = dx * Math.cos(ang) + dz * Math.sin(ang);
-  const rz = -dx * Math.sin(ang) + dz * Math.cos(ang);
-  const stretch = Math.max(1, island.shapeStretch);
-  return Math.sqrt((rx / stretch) ** 2 + rz ** 2);
+  const ang = ((island.shapeAngle ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(-ang);
+  const sin = Math.sin(-ang);
+  return {
+    lx: dx * cos - dz * sin,
+    lz: dx * sin + dz * cos,
+  };
+}
+
+function islandOutlineOpts(island) {
+  const sides = Math.round(island.sides ?? 0);
+  let shapeKind = island.shapeKind ?? 'circle';
+  if (sides <= 0) shapeKind = 'circle';
+  return {
+    shapeKind,
+    sides,
+    ringThickness: island.ringThickness ?? 0.35,
+    shapeAngle: 0,
+  };
 }
 
 function applyCrescentCuts(x, z, mask, island) {
@@ -46,12 +61,15 @@ function applyCrescentCuts(x, z, mask, island) {
 }
 
 export function islandMask(x, z, island) {
-  const dist = ellipseDistance(x, z, island);
-  const t = dist / island.radius;
-  if (t >= 1) return 0;
+  const { lx, lz } = islandLocalXZ(x, z, island);
+  const stretch = Math.max(1, island.shapeStretch ?? 1);
+  const r = island.radius ?? 120;
+  let mask = shapedFalloff(lx, lz, r * stretch, r, islandOutlineOpts(island));
+  if (mask <= 0) return 0;
 
-  const soft = Math.max(0.02, island.coastSoftness);
-  let mask = t > 1 - soft ? (1 - t) / soft : 1;
+  const soft = Math.max(0.02, island.coastSoftness ?? 0.38);
+  if (mask < soft) mask = (mask / soft) * (mask / soft) * (3 - 2 * (mask / soft));
+
   mask = applyCrescentCuts(x, z, mask, island);
   return mask;
 }
@@ -86,14 +104,10 @@ function applyClearings(x, z, h, island) {
   for (const c of island.clearings) {
     const wx = island.centerX + c.x;
     const wz = island.centerZ + c.z;
-    const dx = x - wx;
-    const dz = z - wz;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist < c.radius) {
-      const edge = dist > c.radius - 3 ? smoothstep(c.radius - 3, c.radius, dist) : 0;
-      out = out * edge + c.maxHeight * (1 - edge);
-      if (dist <= c.radius - 3) out = Math.min(out, c.maxHeight);
-    }
+    const flat = shapedFlatten(x, z, wx, wz, c);
+    if (!flat) continue;
+    out = out * flat.blend + flat.target * (1 - flat.blend);
+    if (flat.blend < 0.15) out = Math.min(out, flat.target);
   }
   return out;
 }
@@ -101,15 +115,12 @@ function applyClearings(x, z, h, island) {
 function applyHoles(x, z, h, island) {
   let out = h;
   for (const hole of island.holes ?? []) {
-    const wx = island.centerX + hole.x;
-    const wz = island.centerZ + hole.z;
-    const cut = ellipticalBump(
-      x, z, wx, wz,
-      hole.sizeX, hole.sizeZ,
-      hole.depth,
-      hole.steepness ?? 2
+    out -= holeBump(
+      x, z,
+      island.centerX + hole.x,
+      island.centerZ + hole.z,
+      hole
     );
-    out -= cut;
   }
   return out;
 }
@@ -136,13 +147,11 @@ export function sampleIslandHeight(x, z, island) {
   }
 
   for (const m of island.mountains) {
-    h += ellipticalBump(
+    h += mountainBump(
       x, z,
       island.centerX + m.x,
       island.centerZ + m.z,
-      m.sizeX, m.sizeZ,
-      m.height,
-      m.steepness ?? 2.5
+      m
     );
   }
 

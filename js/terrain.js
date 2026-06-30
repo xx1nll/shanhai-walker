@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createGrassTexture, createCliffTexture, createDirtTexture } from './textures.js';
+import { applyTerrainColors, createMountainColorFn } from './island/terrainColors.js';
 import { createWorldHeightFn, sampleMaxHeight } from './island/islandGenerator.js';
 import { PRESET_DEFAULT } from './island/islandParams.js';
 import { SEA_LEVEL } from './constants.js';
@@ -11,10 +12,12 @@ export const TERRAIN_SIZE = 500;
 export const TERRAIN_SEGMENTS = 112;
 
 const terrainVertexShader = `
+  attribute vec3 color;
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying float vHeight;
   varying float vSlope;
+  varying vec3 vTint;
 
   void main() {
     vec4 wp = modelMatrix * vec4(position, 1.0);
@@ -22,6 +25,7 @@ const terrainVertexShader = `
     vNormal = normalize(mat3(modelMatrix) * normal);
     vHeight = wp.y;
     vSlope = 1.0 - abs(dot(vNormal, vec3(0.0, 1.0, 0.0)));
+    vTint = color;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -40,9 +44,10 @@ const terrainFragmentShader = `
   varying vec3 vNormal;
   varying float vHeight;
   varying float vSlope;
+  varying vec3 vTint;
 
   void main() {
-    float heightT = clamp((vHeight - uSeaLevel) / uMaxHeight, 0.0, 1.0);
+    float heightT = clamp((vHeight - uSeaLevel) / max(uMaxHeight, 0.001), 0.0, 1.0);
 
     vec3 grass = texture2D(uGrassTex, vWorldPos.xz * 0.06).rgb;
     vec3 cliff = texture2D(uCliffTex, vWorldPos.xz * 0.04).rgb;
@@ -54,6 +59,9 @@ const terrainFragmentShader = `
 
     float total = grassW + cliffW + dirtW + 0.001;
     vec3 albedo = (grass * grassW + cliff * cliffW + dirt * dirtW) / total;
+
+    float tintW = length(vTint);
+    albedo = mix(albedo, vTint / max(tintW, 0.001), clamp(tintW, 0.0, 0.85));
 
     float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
     albedo = mix(vec3(lum), albedo, 0.72);
@@ -94,29 +102,31 @@ function buildTerrainMaterial(maxHeight) {
 }
 
 /** Fill mesh vertices from a height function (sync) */
-export function rebuildTerrainMesh(geometry, material, getHeight) {
+export function rebuildTerrainMesh(geometry, material, getHeight, colorFn) {
   const positions = geometry.attributes.position;
   let maxHeight = SEA_LEVEL;
 
   for (let i = 0; i < positions.count; i++) {
     const x = positions.getX(i);
     const z = positions.getZ(i);
-    const y = getHeight(x, z);
+    let y = getHeight(x, z);
+    if (!Number.isFinite(y)) y = SEA_LEVEL - 5;
     positions.setY(i, y);
     maxHeight = Math.max(maxHeight, y);
   }
 
   positions.needsUpdate = true;
   geometry.computeVertexNormals();
+  applyTerrainColors(geometry, colorFn);
 
   if (material.uniforms?.uMaxHeight) {
-    material.uniforms.uMaxHeight.value = maxHeight - SEA_LEVEL;
+    material.uniforms.uMaxHeight.value = Math.max(0.001, maxHeight - SEA_LEVEL);
   }
   return maxHeight;
 }
 
 /** Async rebuild — yields every N rows so the game loop keeps running */
-export async function rebuildTerrainMeshAsync(geometry, material, getHeight, onProgress) {
+export async function rebuildTerrainMeshAsync(geometry, material, getHeight, onProgress, colorFn) {
   const positions = geometry.attributes.position;
   const count = positions.count;
   let maxHeight = SEA_LEVEL;
@@ -125,7 +135,8 @@ export async function rebuildTerrainMeshAsync(geometry, material, getHeight, onP
   for (let i = 0; i < count; i++) {
     const x = positions.getX(i);
     const z = positions.getZ(i);
-    const y = getHeight(x, z);
+    let y = getHeight(x, z);
+    if (!Number.isFinite(y)) y = SEA_LEVEL - 5;
     positions.setY(i, y);
     maxHeight = Math.max(maxHeight, y);
 
@@ -137,9 +148,10 @@ export async function rebuildTerrainMeshAsync(geometry, material, getHeight, onP
 
   positions.needsUpdate = true;
   geometry.computeVertexNormals();
+  applyTerrainColors(geometry, colorFn);
 
   if (material.uniforms?.uMaxHeight) {
-    material.uniforms.uMaxHeight.value = maxHeight - SEA_LEVEL;
+    material.uniforms.uMaxHeight.value = Math.max(0.001, maxHeight - SEA_LEVEL);
   }
   onProgress?.(1);
   return maxHeight;
@@ -157,6 +169,10 @@ export function createTerrain(
     ? worldParams
     : createWorldHeightFn(worldParams);
 
+  const colorFn = typeof worldParams === 'function'
+    ? null
+    : createMountainColorFn(worldParams);
+
   const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
   geometry.rotateX(-Math.PI / 2);
 
@@ -165,7 +181,7 @@ export function createTerrain(
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
 
-  rebuildTerrainMesh(geometry, material, getHeight);
+  rebuildTerrainMesh(geometry, material, getHeight, colorFn);
 
   return {
     mesh,
@@ -175,19 +191,27 @@ export function createTerrain(
     size,
     segments,
     baseGetHeight: getHeight,
+    colorFn,
     islandParams: typeof worldParams === 'function' ? null : worldParams,
-    rebuild(getHeightFn) {
+    setColorFn(fn) {
+      this.colorFn = fn;
+    },
+    rebuild(getHeightFn, colorFn) {
       const fn = getHeightFn || this.getHeight;
+      const cf = colorFn !== undefined ? colorFn : this.colorFn;
       this.getHeight = fn;
       this.baseGetHeight = fn;
-      this.maxHeight = rebuildTerrainMesh(geometry, material, fn);
+      this.colorFn = cf;
+      this.maxHeight = rebuildTerrainMesh(geometry, material, fn, cf);
       return this.maxHeight;
     },
-    async rebuildAsync(getHeightFn, onProgress) {
+    async rebuildAsync(getHeightFn, onProgress, colorFn) {
       const fn = getHeightFn || this.getHeight;
+      const cf = colorFn !== undefined ? colorFn : this.colorFn;
       this.getHeight = fn;
       this.baseGetHeight = fn;
-      this.maxHeight = await rebuildTerrainMeshAsync(geometry, material, fn, onProgress);
+      this.colorFn = cf;
+      this.maxHeight = await rebuildTerrainMeshAsync(geometry, material, fn, onProgress, cf);
       return this.maxHeight;
     },
   };

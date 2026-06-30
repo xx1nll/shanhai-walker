@@ -1,16 +1,19 @@
 import * as THREE from 'three';
 
-export function createOcean(sunDir, seaLevel = -1.5) {
+export function createOcean(sunDir, seaLevel = -1.5, colors = {}) {
   const geo = new THREE.PlaneGeometry(800, 800, 128, 128);
   geo.rotateX(-Math.PI / 2);
+
+  const deep = colors.deep ?? 0x2a5a7a;
+  const shallow = colors.shallow ?? 0x4a8aa8;
 
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     uniforms: {
       uTime: { value: 0 },
       uSeaLevel: { value: seaLevel },
-      uDeepColor: { value: new THREE.Color(0x2a5a7a) },
-      uShallowColor: { value: new THREE.Color(0x4a8aa8) },
+      uDeepColor: { value: new THREE.Color(deep) },
+      uShallowColor: { value: new THREE.Color(shallow) },
       uSunDir: { value: sunDir.clone() },
       uSunColor: { value: new THREE.Color(0xffe8c0) },
     },
@@ -67,6 +70,10 @@ export function createOcean(sunDir, seaLevel = -1.5) {
   mesh.position.y = seaLevel;
   mesh.userData.animate = (t) => {
     mat.uniforms.uTime.value = t;
+  };
+  mesh.userData.setColors = (deep, shallow) => {
+    mat.uniforms.uDeepColor.value.set(deep);
+    mat.uniforms.uShallowColor.value.set(shallow);
   };
   return mesh;
 }

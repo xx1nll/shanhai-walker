@@ -15,8 +15,11 @@ import { createStylizedSky, createSoftClouds } from './sky.js';
 import { createOcean } from './water.js';
 import { createPostProcessing } from './postprocessing.js';
 import { createWorldGrid, Minimap, setupCoordinateLogger } from './mapTools.js';
+import { createHoleWaterGroup } from './holeWater.js';
+import { createMountainColorFn } from './island/terrainColors.js';
 import { LoadingScreen, yieldFrame } from './loading.js';
 import { ColliderRegistry } from './collision/ColliderRegistry.js';
+import { TutorialUI } from './tutorial.js';
 
 const loading = new LoadingScreen();
 
@@ -120,6 +123,7 @@ async function bootstrap() {
   scene.add(terrainData.mesh);
 
   const terrainEditor = new TerrainEditor(terrainData);
+  terrainEditor.setColorFn(terrainData.colorFn);
   terrainEditor.attachBrushRing(scene);
   applyPaintDeltas(terrainEditor, worldParams);
   let getHeight = (x, z) => terrainEditor.getHeight(x, z);
@@ -131,19 +135,26 @@ async function bootstrap() {
   await yieldFrame();
 
   loading.setProgress(0.5, '生成海洋…');
-  const ocean = createOcean(sunDirection, SEA_LEVEL);
+  const ocean = createOcean(sunDirection, SEA_LEVEL, {
+    deep: worldParams.oceanDeepColor ?? '#2a5a7a',
+    shallow: worldParams.oceanShallowColor ?? '#4a8aa8',
+  });
   scene.add(ocean);
+
+  const holeWater = createHoleWaterGroup();
+  scene.add(holeWater);
+  holeWater.userData.rebuild(worldParams, getHeight);
   await yieldFrame();
 
   const colliders = new ColliderRegistry();
 
   loading.setProgress(0.7, '生成坐标网格…');
-  const worldGrid = createWorldGrid(getHeight, { visible: false });
+  const worldGrid = createWorldGrid(getHeight, { visible: false, world: worldParams });
   scene.add(worldGrid);
   await yieldFrame();
 
   loading.setProgress(0.85, '绘制地图…');
-  const minimap = new Minimap(getHeight, document.getElementById('ui'));
+  const minimap = new Minimap(getHeight, document.getElementById('ui'), worldParams);
   await minimap.precomputeAsync((p) => {
     loading.setProgress(0.85 + p * 0.12, '绘制地图…');
   });
@@ -157,6 +168,9 @@ async function bootstrap() {
 
   async function applyWorldToTerrain(world, { keepPaint = false } = {}) {
     const baseFn = createWorldHeightFn(world);
+    const colorFn = createMountainColorFn(world);
+    terrainData.setColorFn(colorFn);
+    terrainEditor.setColorFn(colorFn);
     await terrainEditor.applyBaseAsync(baseFn, () => {}, { clearPaint: !keepPaint });
     if (!keepPaint && world.paintDeltas) terrainEditor.importEdits(world.paintDeltas);
 
@@ -167,7 +181,17 @@ async function bootstrap() {
     getHeight = (x, z) => terrainEditor.getHeight(x, z);
     player.setGetHeight(getHeight);
 
+    if (ocean.userData.setColors) {
+      ocean.userData.setColors(
+        world.oceanDeepColor ?? '#2a5a7a',
+        world.oceanShallowColor ?? '#4a8aa8'
+      );
+    }
+    holeWater.userData.rebuild(world, getHeight);
+
     minimap.setGetHeight(getHeight);
+    minimap.setWorldMarkers(world);
+    worldGrid.userData.updateMarkers?.(world);
     await minimap.rebakeAsync().catch(() => {});
 
     saveWorld(world, terrainEditor);
@@ -196,6 +220,7 @@ async function bootstrap() {
   });
   islandUI.setWorld(worldParams);
   islandUI.syncPaintFromEditor(terrainEditor);
+  terrainEditor._rebuildMesh();
 
   const modeBadge = document.getElementById('mode-badge');
   const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 500);
@@ -295,6 +320,8 @@ async function bootstrap() {
 
   setupCoordinateLogger(player, input);
 
+  const tutorial = new TutorialUI();
+
   function updateCamera() {
     const yaw = input.cameraYaw;
     const pitch = input.cameraPitch;
@@ -329,6 +356,7 @@ async function bootstrap() {
 
     updateCamera();
     ocean.userData.animate(elapsed);
+    holeWater.children.forEach((m) => m.userData.animate?.(elapsed));
     minimap.update(player.position, player.mesh.rotation.y, player.state);
 
     if (modeBadge && player.mode === 'climb' && !terrainEditor.active) {

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SEA_LEVEL } from './constants.js';
+import { applyTerrainColors } from './island/terrainColors.js';
 
 /**
  * Creative terrain editor — paints height deltas onto the heightmap mesh.
@@ -14,6 +15,7 @@ export class TerrainEditor {
     this.segments = segments;
     this.half = size / 2;
     this.material = material;
+    this.colorFn = null;
     this.gridVerts = segments + 1;
     this.deltas = new Float32Array(this.gridVerts * this.gridVerts);
 
@@ -69,6 +71,10 @@ export class TerrainEditor {
     gx = THREE.MathUtils.clamp(gx, 0, this.segments);
     gz = THREE.MathUtils.clamp(gz, 0, this.segments);
     return this.deltas[gz * this.gridVerts + gx];
+  }
+
+  setColorFn(fn) {
+    this.colorFn = fn;
   }
 
   toggle() {
@@ -196,8 +202,9 @@ export class TerrainEditor {
       const gz = Math.round(((z + this.half) / this.size) * this.segments);
       const delta = this._deltaAt(gx, gz);
       const y = this.baseGetHeight(x, z) + delta;
-      positions.setY(i, y);
-      maxHeight = Math.max(maxHeight, y);
+      const safeY = Number.isFinite(y) ? y : SEA_LEVEL - 5;
+      positions.setY(i, safeY);
+      maxHeight = Math.max(maxHeight, safeY);
 
       if (i > 0 && i % batch === 0) {
         onProgress?.(i / count);
@@ -207,11 +214,16 @@ export class TerrainEditor {
 
     positions.needsUpdate = true;
     this.geometry.computeVertexNormals();
+    this._applyVertexColors();
 
     if (this.material.uniforms?.uMaxHeight) {
-      this.material.uniforms.uMaxHeight.value = maxHeight - SEA_LEVEL;
+      this.material.uniforms.uMaxHeight.value = Math.max(0.001, maxHeight - SEA_LEVEL);
     }
     onProgress?.(1);
+  }
+
+  _applyVertexColors() {
+    applyTerrainColors(this.geometry, this.colorFn);
   }
 
   rebuildFromBase() {
@@ -229,15 +241,17 @@ export class TerrainEditor {
       const gz = Math.round(((z + this.half) / this.size) * this.segments);
       const delta = this._deltaAt(gx, gz);
       const y = this.baseGetHeight(x, z) + delta;
-      positions.setY(i, y);
-      maxHeight = Math.max(maxHeight, y);
+      const safeY = Number.isFinite(y) ? y : SEA_LEVEL - 5;
+      positions.setY(i, safeY);
+      maxHeight = Math.max(maxHeight, safeY);
     }
 
     positions.needsUpdate = true;
     this.geometry.computeVertexNormals();
+    this._applyVertexColors();
 
     if (this.material.uniforms?.uMaxHeight) {
-      this.material.uniforms.uMaxHeight.value = maxHeight - SEA_LEVEL;
+      this.material.uniforms.uMaxHeight.value = Math.max(0.001, maxHeight - SEA_LEVEL);
     }
   }
 

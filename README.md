@@ -37,8 +37,12 @@ npm run dev
 ## Island editor (P)
 
 - Adjust island shape, mountains, hills, crescents, holes, and clearings — terrain updates live
-- **导入 JSON 文件** / **粘贴 JSON** — load a saved world (includes hand-painted layer)
-- **复制 JSON** — export world + paint data
+- **导入 JSON** — paste world JSON in the text box, click **应用 JSON**
+- **复制 JSON** — export world + paint data (also fills the import box)
+
+## AI island generation
+
+See [docs/deepseek-island-prompt.md](docs/deepseek-island-prompt.md) for a DeepSeek system prompt that converts natural-language descriptions into importable island JSON.
 
 ## Tech
 
